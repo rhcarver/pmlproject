@@ -1,0 +1,131 @@
+---
+title: "Practical Machine Learning HAR  Project"
+author: "a student"
+date: "July 7, 2016"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Overview and summary
+
+This project applies bagging approach to the provided training data to predict the quality of a weight-lifting exercise based on measurements from three sensors worn by human subjects, plus one sensor placed on dumbbells.
+
+The analytic approach was guided in part by the descriptions provided in the paper by Velloso et al, "Qualitative Activity Recognition of Weight Lifting Exercises", referenced in the Coursera assignment. The article was helpful in selecting features from among the 160 variables in the dataset. The authors used a random forest model with bagging; I used a random forest with Box-Cox preprocessing and 6-fold cross validation. 
+
+The analysis relies on the caret package, as well as the recommendations included in lgreski's Discussion posting "Improving Performance of Random Forest in *caret::train()*", in particular by using parallel processing.
+```{r, echo=FALSE, warning=FALSE, message=FALSE}
+setwd("~/Dropbox/MyRWork/Coursera Practical Machine Learning")
+
+library(caret)
+library(ggplot2)
+library(GGally)
+library(parallel)
+library(doParallel)
+library(party)
+library(randomForest)
+set.seed(1953)
+
+```
+
+## The Process
+I began by invoking the packages to be used in preparing this report: caret, ggplot2, GGally, parallel, doParallel, party, and randomForest. I also set a random number seed for reproducibility.
+
+I then read in the training and testing data tables. 
+```{r, echo=FALSE}
+# now read and summarize training data
+training <- read.csv("pml-training.csv")
+t1 <- table(training$classe)
+round(prop.table(t1),3)
+
+testing <- read.csv("pml-testing.csv")
+```
+
+We see that approximately 28% of the observed lifts were done correctly (Class A), with the remaining cases involved an error of one type or another. Between 16 and 19% fell into each of the four "error" categories.
+
+Guided by the above-referenced article, I explored the available variables selectively for each sensor location, using a 1000 observation simple random subset of the training data for processing  speed. For example, the authors reported using 4 measures from the dumbbell taken from the accelerometer, gyroscope and magnenometer.  I selected 7 of the dumbbell readings for exploration (see figure below), and based on that inspection chose two of them ( magnet_dumbbell_y and magnet_dumbbell_z) for inclusion as features. 
+
+```{r, echo=FALSE, warning=FALSE}
+trsamp <- training[sample(1:nrow(training), 500,
+              replace=FALSE),]
+xdumb1 <- c(102,113, 114, 115, 119, 120,121)
+df <- subset(trsamp, select=xdumb1)
+df$classe <- cbind(trsamp$classe)
+
+sm <- ggpairs(df, axisLabels = "none")
+sm
+```
+After similar explorations with the other three placements, I chose 11 features for the random forest model taken variously from the belt, forearm, arm and dumbbells. I then create a y vector containing the classe observations from the training set, and an x object with all 11 of the selected features. 
+
+```{r}
+# set up list of features as x
+y <- training$classe
+# choose x columns after exploratory select columns per article
+xbelt <- c(11, 37, 39, 41, 44)
+xarm <- c(49, 66)
+xdumb <- c(120,121)
+xfore <- c(123, 151)
+allx <- c(xbelt, xarm, xdumb, xfore)
+x <- training[, allx]
+```
+
+# Configure parallel processing
+
+Following Greski's advice on a parallel implementation of Random Forest, I configured parallel processing.
+
+```{r}
+# configure Parallel Processing
+cluster <- makeCluster(detectCores()-1) # convention to leave 1 core for OS
+registerDoParallel(cluster)
+
+```
+
+ 
+# Configure trainControl Object
+The next step is to set parameters for the trainControl object to be referenced in fitting the random forest model. Note that we specify a 6-fold cross validation (method = "cv" and number = 6). Initially I used 10-fold cv, but the even with parallel processing the time required was quite long, so I reduced it to 6 folds.
+```{r}
+fitControl <- trainControl(method="cv",
+                number = 6,
+                allowParallel = TRUE)
+```
+
+# Develop the training model
+Here we actually estimate the random forest model. Based on inspection of the features and finding several of them to be skewed, I elected to preprocess with a Box-Cox transformation.
+
+```{r}
+fitrf <- train(x,y, data=training, 
+               preProcess=c("BoxCox"), method="rf",
+               trControl = fitControl)
+
+```
+
+# De-register parallel processing cluster
+we now call the stopcluster() function, having done the heavy lifting of fitting the model. 
+
+```{r}
+stopCluster(cluster)
+```
+
+# Summary of model performance
+At this point we can assess how accurately the training model performs with the training data. The next code chunk summarizes the model and its fit.
+```{r}
+
+fitrf
+fitrf$resample
+confusionMatrix.train(fitrf)
+
+```
+
+From the model summary, we see that (perhaps due to overfitting) the accuracy rate is quite high at approximately 95%. It is unrealistic to expect such high accuracy with the testing data, but we now can go ahead and make the estimates required for the second quiz.
+
+# Predictions with Testing Data
+
+```{r}
+xnew <- testing[, allx]
+newpred <- rffits <- predict(fitrf, xnew)
+newpred
+
+```
+
